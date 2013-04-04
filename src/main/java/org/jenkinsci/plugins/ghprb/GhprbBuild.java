@@ -112,17 +112,6 @@ public class GhprbBuild {
 		}
 		repo.createCommitStatus(build, state, (merge ? "Merged build finished." : "Build finished."),pull );
 
-		String publishedURL = GhprbTrigger.DESCRIPTOR.getPublishedURL();
-		if (publishedURL != null && !publishedURL.isEmpty()) {
-			String msg;
-			if (state == GHCommitState.SUCCESS) {
-				msg = GhprbTrigger.DESCRIPTOR.getMsgSuccess();
-			} else {
-				msg = GhprbTrigger.DESCRIPTOR.getMsgFailure();
-			}
-			repo.addComment(pull, msg + "\nRefer to this link for build results: " + publishedURL + build.getUrl());
-		}
-
 		// close failed pull request automatically
 		if (state == GHCommitState.FAILURE && repo.isAutoCloseFailedPullRequests()) {
 			repo.closePullRequest(pull);

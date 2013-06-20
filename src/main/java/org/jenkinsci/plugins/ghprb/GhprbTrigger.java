@@ -1,14 +1,13 @@
 package org.jenkinsci.plugins.ghprb;
 
 import antlr.ANTLRException;
-import com.coravy.hudson.plugins.github.GithubProjectProperty;
 import hudson.Extension;
 import hudson.model.AbstractProject;
 import hudson.model.Item;
-import hudson.model.ParametersAction;
-import hudson.model.ParameterValue;
-import hudson.model.ParametersDefinitionProperty;
 import hudson.model.ParameterDefinition;
+import hudson.model.ParameterValue;
+import hudson.model.ParametersAction;
+import hudson.model.ParametersDefinitionProperty;
 import hudson.model.StringParameterValue;
 import hudson.model.queue.QueueTaskFuture;
 import hudson.triggers.TimerTrigger;
@@ -16,18 +15,18 @@ import hudson.triggers.Trigger;
 import hudson.triggers.TriggerDescriptor;
 import hudson.util.FormValidation;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.ArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.servlet.ServletException;
 import net.sf.json.JSONObject;
+import org.kohsuke.github.GHAuthorization;
 import org.kohsuke.github.GHCommitState;
+import org.kohsuke.github.GitHub;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
@@ -36,73 +35,55 @@ import org.kohsuke.stapler.StaplerRequest;
  * @author Honza Brázdil <jbrazdil@redhat.com>
  */
 public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
-	public final String adminlist;
-	public       String whitelist;
-	public final String orgslist;
-	public final String cron;
-	public       String msgSuccess;
-	public       String msgFailure;
+	private static final Logger logger = Logger.getLogger(GhprbTrigger.class.getName());
+	private final String adminlist;
+	private       String whitelist;
+	private final String orgslist;
+	private final String cron;
+	private final Boolean useGitHubHooks;
+	private final Boolean permitAll;
+	private Boolean autoCloseFailedPullRequests;
 
-	transient private GhprbRepo                      repository;
-	transient private Map<Integer,GhprbPullRequest>  pulls;
-	transient         boolean                        changed;
-	transient         HashSet<String>                admins;
-	transient         HashSet<String>                whitelisted;
-	transient         HashSet<String>                organisations;
-
-	private static final Pattern githubUserRepoPattern = Pattern.compile("^(http[s]?://[^/]*)/([^/]*)/([^/]*).*");
+	transient private Ghprb ml;
 
 	@DataBoundConstructor
-	public GhprbTrigger(String adminlist, String whitelist, String orgslist, String cron, String msgSuccess, String msgFailure) throws ANTLRException{
+	public GhprbTrigger(String adminlist, String whitelist, String orgslist, String cron, Boolean useGitHubHooks, Boolean permitAll, Boolean autoCloseFailedPullRequests) throws ANTLRException{
 		super(cron);
 		this.adminlist = adminlist;
 		this.whitelist = whitelist;
 		this.orgslist = orgslist;
 		this.cron = cron;
-		this.msgSuccess = msgSuccess;
-		this.msgFailure = msgFailure;
+		this.useGitHubHooks = useGitHubHooks;
+		this.permitAll = permitAll;
+		this.autoCloseFailedPullRequests = autoCloseFailedPullRequests;
 	}
 
 	@Override
 	public void start(AbstractProject<?, ?> project, boolean newInstance) {
-		String projectName = project.getFullName();
-
-		pulls = DESCRIPTOR.getPullRequests(projectName);
-
-		GithubProjectProperty ghpp = project.getProperty(GithubProjectProperty.class);
-		if(ghpp == null || ghpp.getProjectUrl() == null) {
-			Logger.getLogger(GhprbTrigger.class.getName()).log(Level.WARNING, "A github project url is required.");
+		try{
+			ml = Ghprb.getBuilder()
+			     .setProject(project)
+			     .setTrigger(this)
+			     .setPulls(DESCRIPTOR.getPullRequests(project.getFullName()))
+			     .build();
+		}catch(IllegalStateException ex){
+			logger.log(Level.SEVERE, "Can't start trigger", ex);
 			return;
-		}
-
-		Matcher m = githubUserRepoPattern.matcher(ghpp.getProjectUrl().baseUrl());
-		if(!m.matches()) {
-			Logger.getLogger(GhprbTrigger.class.getName()).log(Level.WARNING, "Invalid github project url: {0}", ghpp.getProjectUrl().baseUrl());
-			return;
-		}
-		String githubServer = m.group(1);
-		String user = m.group(2);
-		String repo = m.group(3);
-		repository = new GhprbRepo(this, githubServer, user, repo);
-
-		admins = new HashSet<String>(Arrays.asList(adminlist.split("\\s+")));
-		whitelisted = new HashSet<String>(Arrays.asList(whitelist.split("\\s+")));
-		if(orgslist == null){
-			organisations = new HashSet<String>();
-		}else{
-			organisations = new HashSet<String>(Arrays.asList(orgslist.split("\\s+")));
 		}
 
 		super.start(project, newInstance);
 	}
 
+	public Ghprb getGhprb(){
+		return ml;
+	}
+
 	@Override
 	public void stop() {
-		whitelisted = null;
-		admins = null;
-		organisations = null;
-		repository = null;
-		pulls = null;
+		if(ml != null){
+			ml.stop();
+			ml = null;
+		}
 		super.stop();
 	}
 
@@ -114,6 +95,8 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 			values.add(new StringParameterValue("sha1",cause.getCommit()));
 		}
 		values.add(new StringParameterValue("ghprbActualCommit",cause.getCommit()));
+		values.add(new StringParameterValue("ghprbPullId",String.valueOf(cause.getPullID())));
+		values.add(new StringParameterValue("ghprbTargetBranch",String.valueOf(cause.getTargetBranch())));
 
 		return this.job.scheduleBuild2(0,cause,new ParametersAction(values));
 	}
@@ -133,18 +116,73 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 
 	@Override
 	public void run() {
-		changed = false;
-		repository.check(pulls);
-		if(changed) try {
+		ml.run();
+		DESCRIPTOR.save();
+	}
+
+	public void addWhitelist(String author){
+		whitelist = whitelist + " " + author;
+		try {
 			this.job.save();
 		} catch (IOException ex) {
-			Logger.getLogger(GhprbTrigger.class.getName()).log(Level.SEVERE, null, ex);
+			logger.log(Level.SEVERE, "Failed to save new whitelist", ex);
 		}
-		DESCRIPTOR.save();
+	}
+
+	public String getAdminlist() {
+		if(adminlist == null){
+			return "";
+		}
+		return adminlist;
+	}
+
+	public String getWhitelist() {
+		if(whitelist == null){
+			return "";
+		}
+		return whitelist;
+	}
+
+	public String getOrgslist() {
+		if(orgslist == null){
+			return "";
+		}
+		return orgslist;
+	}
+
+	public String getCron() {
+		return cron;
+	}
+
+	public Boolean getUseGitHubHooks() {
+		return useGitHubHooks != null && useGitHubHooks;
+	}
+
+	public Boolean getPermitAll() {
+		return permitAll != null && permitAll;
+	}
+
+	public Boolean isAutoCloseFailedPullRequests() {
+		if(autoCloseFailedPullRequests == null){
+			Boolean autoClose = getDescriptor().getAutoCloseFailedPullRequests();
+			return (autoClose != null && autoClose);
+		}else{
+			return autoCloseFailedPullRequests;
+		}
+	}
+
+	public static GhprbTrigger getTrigger(AbstractProject p){
+		Trigger trigger = p.getTrigger(GhprbTrigger.class);
+		if(trigger == null || (!(trigger instanceof GhprbTrigger))) return null;
+		return (GhprbTrigger) trigger;
 	}
 
 	@Override
 	public DescriptorImpl getDescriptor() {
+		return DESCRIPTOR;
+	}
+
+	public static DescriptorImpl getDscp(){
 		return DESCRIPTOR;
 	}
 
@@ -166,8 +204,10 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 		private Boolean useComments = false;
 		private String unstableAs = GHCommitState.FAILURE.name();
 		private Boolean autoCloseFailedPullRequests = false;
-		private String msgSuccess;
-		private String msgFailure;
+		private String msgSuccess = "Test PASSed.";
+		private String msgFailure = "Test FAILed.";
+
+		private transient GhprbGitHub gh;
 
 		// map of jobs (by their fullName) abd their map of pull requests
 		private Map<String, Map<Integer,GhprbPullRequest>> jobs;
@@ -186,7 +226,7 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 
 		@Override
 		public String getDisplayName() {
-			return "Github pull requests builder";
+			return "GitHub pull requests builder";
 		}
 
 		@Override
@@ -208,15 +248,16 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 			msgSuccess = formData.getString("msgSuccess");
 			msgFailure = formData.getString("msgFailure");
 			save();
+			gh = new GhprbGitHub();
 			return super.configure(req,formData);
 		}
 
-		// Github username may only contain alphanumeric characters or dashes and cannot begin with a dash
+		// GitHub username may only contain alphanumeric characters or dashes and cannot begin with a dash
 		private static final Pattern adminlistPattern = Pattern.compile("((\\p{Alnum}[\\p{Alnum}-]*)|\\s)*");
 		public FormValidation doCheckAdminlist(@QueryParameter String value)
 				throws ServletException {
 			if(!adminlistPattern.matcher(value).matches()){
-				return FormValidation.error("Github username may only contain alphanumeric characters or dashes and cannot begin with a dash. Separate them with whitespece.");
+				return FormValidation.error("GitHub username may only contain alphanumeric characters or dashes and cannot begin with a dash. Separate them with whitespece.");
 			}
 			return FormValidation.ok();
 		}
@@ -228,7 +269,7 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 		public FormValidation doCheckServerAPIUrl(@QueryParameter String value){
 			if("https://api.github.com".equals(value)) return FormValidation.ok();
 			if(value.endsWith("/api/v3")) return FormValidation.ok();
-			return FormValidation.warning("Github api url is \"https://api.github.com\". Github enterprise api url ends with \"/api/v3\"");
+			return FormValidation.warning("GitHub api url is \"https://api.github.com\". GitHub enterprise api url ends with \"/api/v3\"");
 		}
 
 		public String getUsername() {
@@ -288,11 +329,28 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 		}
 
 		public String getMsgSuccess() {
+			if(msgSuccess == null){
+				return "Test PASSed.";
+			}
 			return msgSuccess;
 		}
 
 		public String getMsgFailure() {
+			if(msgFailure == null){
+				return "Test FAILed.";
+			}
 			return msgFailure;
+		}
+
+		public boolean isUseComments(){
+			return (useComments != null && useComments);
+		}
+
+		public GhprbGitHub getGitHub(){
+			if(gh == null){
+				gh = new GhprbGitHub();
+			}
+			return gh;
 		}
 
 		private Map<Integer, GhprbPullRequest> getPullRequests(String projectName) {
@@ -304,6 +362,18 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 				jobs.put(projectName, ret);
 			}
 			return ret;
+		}
+
+		public FormValidation doCreateApiToken(
+				@QueryParameter("username") final String username,
+		        @QueryParameter("password") final String password){
+			try{
+				GitHub gh = GitHub.connectToEnterprise(this.serverAPIUrl, username, password);
+				GHAuthorization token = gh.createToken(Arrays.asList(GHAuthorization.REPO_STATUS, GHAuthorization.REPO), "Jenkins GitHub Pull Request Builder", null);
+				return FormValidation.ok("Access token created: " + token.getToken());
+			}catch(IOException ex){
+				return FormValidation.error("GitHub API token couldn't be created" + ex.getMessage());
+			}
 		}
 	}
 }

@@ -2,7 +2,13 @@
   <f:entry title="${%Admin list}" field="adminlist">
     <f:textarea default="${descriptor.adminlist}"/>
   </f:entry>
+  <f:entry title="Use github hooks for build triggering" field="useGitHubHooks">
+    <f:checkbox />
+  </f:entry>
   <f:advanced>
+	<f:entry title="${%Close failed pull request automatically?}" field="autoCloseFailedPullRequests">
+		<f:checkbox default="${descriptor.autoCloseFailedPullRequests}"/>
+	</f:entry>
 	<f:entry title="${%Crontab line}" field="cron">
 	  <f:textbox default="${descriptor.cron}"/>
 	</f:entry>
@@ -12,5 +18,8 @@
 	<f:entry title="${%List of organisations. Their members will be whitelisted.}" field="orgslist">
 	  <f:textarea />
 	</f:entry>
+    <f:entry title="Build every pull request automatically without asking (Dangerous!)." field="permitAll">
+      <f:checkbox />
+    </f:entry>
   </f:advanced>
 </j:jelly>

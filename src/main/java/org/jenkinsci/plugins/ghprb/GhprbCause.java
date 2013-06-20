@@ -9,19 +9,18 @@ public class GhprbCause extends Cause{
 	private final String commit;
 	private final int pullID;
 	private final boolean merged;
-	
-	public GhprbCause(String commit, int pullID){
-		this(commit, pullID, false);
-	}
-	public GhprbCause(String commit, int pullID, boolean merged){
+	private final String targetBranch;
+
+	public GhprbCause(String commit, int pullID, boolean merged, String targetBranch){
 		this.commit = commit;
 		this.pullID = pullID;
 		this.merged = merged;
+		this.targetBranch = targetBranch;
 	}
 
 	@Override
 	public String getShortDescription() {
-		return "Github pull request #" + pullID + " of commit " + commit + (merged? " automatically merged." : ".");
+		return "GitHub pull request #" + pullID + " of commit " + commit + (merged? " automatically merged." : ".");
 	}
 
 	public String getCommit() {
@@ -34,5 +33,9 @@ public class GhprbCause extends Cause{
 
 	public int getPullID(){
 		return pullID;
+	}
+
+	public String getTargetBranch() {
+		return targetBranch;
 	}
 }

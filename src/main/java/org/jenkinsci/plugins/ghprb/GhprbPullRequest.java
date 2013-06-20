@@ -12,53 +12,80 @@ import org.kohsuke.github.GHPullRequest;
  * @author Honza Brázdil <jbrazdil@redhat.com>
  */
 public class GhprbPullRequest{
+	private static final Logger logger = Logger.getLogger(GhprbPullRequest.class.getName());
 	private final int id;
 	private final String author;
 	private Date updated;
 	private String head;
 	private boolean mergeable;
+	private String reponame;
+	private String target;
 
 	private boolean shouldRun = false;
 	private boolean accepted = false;
 	@Deprecated private transient boolean askedForApproval; // TODO: remove
 
-	private transient GhprbRepo repo;
+	private transient Ghprb ml;
+	private transient GhprbRepository repo;
 
-	GhprbPullRequest(GHPullRequest pr, GhprbRepo ghprbRepo) {
+	GhprbPullRequest(GHPullRequest pr, Ghprb helper, GhprbRepository repo) {
 		id = pr.getNumber();
 		updated = pr.getUpdatedAt();
 		head = pr.getHead().getSha();
 		author = pr.getUser().getLogin();
+		reponame = repo.getName();
+		target = pr.getBase().getRef();
 
-		repo = ghprbRepo;
+		this.ml = helper;
+		this.repo = repo;
 
-		if(repo.isWhitelisted(author)){
+		if(helper.isWhitelisted(author)){
 			accepted = true;
 			shouldRun = true;
 		}else{
-			Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.INFO, "Author of #{0} {1} on {2} not in whitelist!", new Object[]{id, author, ghprbRepo.getName()});
-			addComment(repo.getDefaultComment());
+			logger.log(Level.INFO, "Author of #{0} {1} on {2} not in whitelist!", new Object[]{id, author, reponame});
+			repo.addComment(id, GhprbTrigger.getDscp().getRequestForTestingPhrase());
 		}
 
-		Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.INFO, "Created pull request #{0} on {1} by {2} updated at: {3} SHA: {4}", new Object[]{id, ghprbRepo.getName(), author, updated, head});
+		logger.log(Level.INFO, "Created pull request #{0} on {1} by {2} updated at: {3} SHA: {4}", new Object[]{id, reponame, author, updated, head});
 	}
 
-	public void check(GHPullRequest pr, GhprbRepo ghprbRepo){
-		repo = ghprbRepo;
+	public void init(Ghprb helper, GhprbRepository repo) {
+		this.ml = helper;
+		this.repo = repo;
+		if(reponame == null) reponame = repo.getName(); // If this instance was created before v1.8, it can be null.
+	}
+
+	public void check(GHPullRequest pr){
+		if(target == null) target = pr.getBase().getRef(); // If this instance was created before target was introduced (before v1.8), it can be null.
+
 		if(isUpdated(pr)){
-			Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.INFO, "Pull request builder: pr #{0} was updated on {1} at {2}", new Object[]{id, ghprbRepo.getName(), updated});
+			logger.log(Level.INFO, "Pull request builder: pr #{0} was updated on {1} at {2}", new Object[]{id, reponame, updated});
 
 			int commentsChecked = checkComments(pr);
 			boolean newCommit   = checkCommit(pr.getHead().getSha());
 
 			if(!newCommit && commentsChecked == 0){
-				Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.INFO, "Pull request was updated on repo " + ghprbRepo.getName() + " but there aren't any new comments nor commits - that may mean that commit status was updated.");
+				logger.log(Level.INFO, "Pull request was updated on repo {0} but there aren''t any new comments nor commits - that may mean that commit status was updated.", reponame);
 			}
 			updated = pr.getUpdatedAt();
 		}
 
 		if(shouldRun){
 			checkMergeable(pr);
+			build();
+		}
+	}
+
+	public void check(GHIssueComment comment) {
+		try {
+			checkComment(comment);
+			updated = comment.getUpdatedAt();
+		} catch (IOException ex) {
+			logger.log(Level.SEVERE, "Couldn't check comment #" + comment.getId(), ex);
+			return;
+		}
+		if (shouldRun) {
 			build();
 		}
 	}
@@ -71,36 +98,21 @@ public class GhprbPullRequest{
 		return ret;
 	}
 
-	private void build() {
+	private void build(){
 		shouldRun = false;
+		String message = ml.getBuilds().build(this);
 
-		StringBuilder sb = new StringBuilder();
-		if(repo.cancelBuild(id)){
-			sb.append("Previous build stopped.");
-		}
+		repo.createCommitStatus(head, GHCommitState.PENDING, null, message,id);
 
-		if(mergeable){
-			sb.append(" Merged build triggered.");
-		}else{
-			sb.append(" Build triggered.");
-		}
-
-		repo.startJob(id,head, mergeable);
-		repo.createCommitStatus(head, GHCommitState.PENDING, null, sb.toString(),id);
-
-		Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.INFO, sb.toString());
-	}
-
-	private void addComment(String comment) {
-		repo.addComment(id,comment);
+		logger.log(Level.INFO, message);
 	}
 
 	// returns false if no new commit
 	private boolean checkCommit(String sha){
 		if(head.equals(sha)) return false;
 
-		if(Logger.getLogger(GhprbPullRequest.class.getName()).isLoggable(Level.FINE)){
-			Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.FINE, "New commit. Sha: " + head + " => " + sha);
+		if(logger.isLoggable(Level.FINE)){
+			logger.log(Level.FINE, "New commit. Sha: {0} => {1}", new Object[]{head, sha});
 		}
 
 		head = sha;
@@ -112,31 +124,28 @@ public class GhprbPullRequest{
 
 	private void checkComment(GHIssueComment comment) throws IOException {
 		String sender = comment.getUser().getLogin();
-		if (repo.isMe(sender)){
-			return;
-		}
 		String body = comment.getBody();
 
 		// add to whitelist
-		if (repo.isWhitelistPhrase(body) && repo.isAdmin(sender)){
-			if(!repo.isWhitelisted(author)) {
-				repo.addWhitelist(author);
+		if (ml.isWhitelistPhrase(body) && ml.isAdmin(sender)){
+			if(!ml.isWhitelisted(author)) {
+				ml.addWhitelist(author);
 			}
 			accepted = true;
 			shouldRun = true;
 		}
 
 		// ok to test
-		if(repo.isOktotestPhrase(body) && repo.isAdmin(sender)){
+		if(ml.isOktotestPhrase(body) && ml.isAdmin(sender)){
 			accepted = true;
 			shouldRun = true;
 		}
 
 		// test this please
-		if (repo.isRetestPhrase(body)){
-			if(repo.isAdmin(sender)){
+		if (ml.isRetestPhrase(body)){
+			if(ml.isAdmin(sender)){
 				shouldRun = true;
-			}else if(accepted && repo.isWhitelisted(sender) ){
+			}else if(accepted && ml.isWhitelisted(sender) ){
 				shouldRun = true;
 			}
 		}
@@ -151,22 +160,31 @@ public class GhprbPullRequest{
 					try {
 						checkComment(comment);
 					} catch (IOException ex) {
-						Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.SEVERE, "Couldn't check comment #" + comment.getId(), ex);
+						logger.log(Level.SEVERE, "Couldn't check comment #" + comment.getId(), ex);
 					}
 				}
 			}
 		} catch (IOException e) {
-			Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.SEVERE, "Couldn't obtain comments.", e);
+			logger.log(Level.SEVERE, "Couldn't obtain comments.", e);
 		}
 		return count;
 	}
 
 	private void checkMergeable(GHPullRequest pr) {
 		try {
-			mergeable = pr.getMergeable();
+			int r=5;
+			while(pr.getMergeable() == null && r-->0){
+				try {
+					Thread.sleep(1000);
+				} catch (InterruptedException ex) {
+					break;
+				}
+				pr = repo.getPullRequest(id);
+			}
+			mergeable = pr.getMergeable() != null && pr.getMergeable();
 		} catch (IOException e) {
 			mergeable = false;
-			Logger.getLogger(GhprbPullRequest.class.getName()).log(Level.SEVERE, "Couldn't obtain mergeable status.", e);
+			logger.log(Level.SEVERE, "Couldn't obtain mergeable status.", e);
 		}
 	}
 
@@ -183,5 +201,21 @@ public class GhprbPullRequest{
 		int hash = 7;
 		hash = 89 * hash + this.id;
 		return hash;
+	}
+
+	public int getId() {
+		return id;
+	}
+
+	public String getHead() {
+		return head;
+	}
+
+	public boolean isMergeable() {
+		return mergeable;
+	}
+
+	public String getTarget(){
+		return target;
 	}
 }

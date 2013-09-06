@@ -1,6 +1,7 @@
 package org.jenkinsci.plugins.ghprb;
 
 import antlr.ANTLRException;
+import com.coravy.hudson.plugins.github.GithubProjectProperty;
 import hudson.Extension;
 import hudson.model.AbstractProject;
 import hudson.model.Item;
@@ -40,6 +41,8 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 	private       String whitelist;
 	private final String orgslist;
 	private final String cron;
+	private final String triggerPhrase;
+	private final Boolean onlyTriggerPhrase;
 	private final Boolean useGitHubHooks;
 	private final Boolean permitAll;
 	private Boolean autoCloseFailedPullRequests;
@@ -47,12 +50,15 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 	transient private Ghprb ml;
 
 	@DataBoundConstructor
-	public GhprbTrigger(String adminlist, String whitelist, String orgslist, String cron, Boolean useGitHubHooks, Boolean permitAll, Boolean autoCloseFailedPullRequests) throws ANTLRException{
+	public GhprbTrigger(String adminlist, String whitelist, String orgslist, String cron, String triggerPhrase,
+			Boolean onlyTriggerPhrase, Boolean useGitHubHooks, Boolean permitAll, Boolean autoCloseFailedPullRequests) throws ANTLRException{
 		super(cron);
 		this.adminlist = adminlist;
 		this.whitelist = whitelist;
 		this.orgslist = orgslist;
 		this.cron = cron;
+		this.triggerPhrase = triggerPhrase;
+		this.onlyTriggerPhrase = onlyTriggerPhrase;
 		this.useGitHubHooks = useGitHubHooks;
 		this.permitAll = permitAll;
 		this.autoCloseFailedPullRequests = autoCloseFailedPullRequests;
@@ -60,6 +66,10 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 
 	@Override
 	public void start(AbstractProject<?, ?> project, boolean newInstance) {
+		if (project.getProperty(GithubProjectProperty.class) == null) {
+			logger.log(Level.INFO, "GitHub project not set up, cannot start trigger for job " + project.getName());
+			return;
+		}
 		try{
 			ml = Ghprb.getBuilder()
 			     .setProject(project)
@@ -97,6 +107,8 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 		values.add(new StringParameterValue("ghprbActualCommit",cause.getCommit()));
 		values.add(new StringParameterValue("ghprbPullId",String.valueOf(cause.getPullID())));
 		values.add(new StringParameterValue("ghprbTargetBranch",String.valueOf(cause.getTargetBranch())));
+		// it's possible the GHUser doesn't have an associated email address
+		values.add(new StringParameterValue("ghprbPullAuthorEmail",cause.getAuthorEmail() != null ? cause.getAuthorEmail() : ""));
 
 		return this.job.scheduleBuild2(0,cause,new ParametersAction(values));
 	}
@@ -116,6 +128,7 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 
 	@Override
 	public void run() {
+		if (ml == null) return;
 		ml.run();
 		DESCRIPTOR.save();
 	}
@@ -152,6 +165,17 @@ public final class GhprbTrigger extends Trigger<AbstractProject<?, ?>> {
 
 	public String getCron() {
 		return cron;
+	}
+
+	public String getTriggerPhrase() {
+		if(triggerPhrase == null){
+			return "";
+		}
+		return triggerPhrase;
+	}
+
+	public Boolean getOnlyTriggerPhrase() {
+		return onlyTriggerPhrase != null && onlyTriggerPhrase;
 	}
 
 	public Boolean getUseGitHubHooks() {

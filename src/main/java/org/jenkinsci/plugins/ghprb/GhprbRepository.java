@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.HashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.model.Jenkins;
@@ -163,9 +164,17 @@ public class GhprbRepository {
 	}
 
 	public boolean createHook(){
-		try{
+		if (repo == null) {
+			logger.log(Level.INFO, "Repository not available, cannot set pull request hook for repository " +
+					reponame);
+			return false;
+		}
+		try {
 			if(hookExist()) return true;
-			repo.createWebHook(new URL(ml.getHookUrl()),EVENTS);
+			Map<String, String> config = new HashMap<String, String>();
+			config.put("url", new URL(ml.getHookUrl()).toExternalForm());
+			config.put("insecure_ssl", "1");
+			repo.createHook("web", config, EVENTS, true);
 			return true;
 		}catch(IOException ex){
 			logger.log(

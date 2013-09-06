@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.kohsuke.github.GHCommitState;
+import org.kohsuke.github.GHIssueState;
+import org.kohsuke.github.GHPullRequest;
 
 /**
  * @author janinko
@@ -34,7 +36,7 @@ public class GhprbBuilds {
 			sb.append(" Build triggered.");
 		}
 
-		GhprbCause cause = new GhprbCause(pr.getHead(), pr.getId(), pr.isMergeable(), pr.getTarget());
+		GhprbCause cause = new GhprbCause(pr.getHead(), pr.getId(), pr.isMergeable(), pr.getTarget(), pr.getAuthorEmail(), pr.getTitle());
 
 		QueueTaskFuture<?> build = trigger.startJob(cause);
 		if(build == null){
@@ -59,7 +61,7 @@ public class GhprbBuilds {
 
 		repo.createCommitStatus(build, GHCommitState.PENDING, (c.isMerged() ? "Merged build started." : "Build started."),c.getPullID());
 		try {
-			build.setDescription("<a href=\"" + repo.getRepoUrl()+"/pull/"+c.getPullID()+"\">Pull request #"+c.getPullID()+"</a>");
+			build.setDescription("<a title=\"" + c.getTitle() + "\" href=\"" + repo.getRepoUrl()+"/pull/"+c.getPullID()+"\">PR #"+c.getPullID()+"</a>: " + c.getAbbreviatedTitle());
 		} catch (IOException ex) {
 			logger.log(Level.SEVERE, "Can't update build description", ex);
 		}
@@ -92,7 +94,16 @@ public class GhprbBuilds {
 
 		// close failed pull request automatically
 		if (state == GHCommitState.FAILURE && trigger.isAutoCloseFailedPullRequests()) {
-			repo.closePullRequest(c.getPullID());
+
+			try {
+				GHPullRequest pr = repo.getPullRequest(c.getPullID());
+
+				if (pr.getState().equals(GHIssueState.OPEN)) {
+					repo.closePullRequest(c.getPullID());
+				}
+			} catch (IOException ex) {
+				logger.log(Level.SEVERE, "Can't close pull request", ex);
+			}
 		}
 	}
 }

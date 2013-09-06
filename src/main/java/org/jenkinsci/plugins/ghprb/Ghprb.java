@@ -21,6 +21,7 @@ public class Ghprb {
 	private HashSet<String>       admins;
 	private HashSet<String>       whitelisted;
 	private HashSet<String>       organisations;
+	private String                triggerPhrase;
 	private GhprbTrigger          trigger;
 	private GhprbRepository       repository;
 	private GhprbBuilds           builds;
@@ -93,6 +94,14 @@ public class Ghprb {
 		return oktotestPhrasePattern.matcher(comment).matches();
 	}
 
+	public boolean isTriggerPhrase(String comment){
+		return !triggerPhrase.equals("") && comment.contains(triggerPhrase);
+	}
+
+	public boolean ifOnlyTriggerPhrase() {
+		return trigger.getOnlyTriggerPhrase();
+	}
+
 	public boolean isWhitelisted(String username){
 		return trigger.getPermitAll()
 			|| whitelisted.contains(username)
@@ -136,6 +145,7 @@ public class Ghprb {
 			gml.whitelisted.remove("");
 			gml.organisations = new HashSet<String>(Arrays.asList(trigger.getOrgslist().split("\\s+")));
 			gml.organisations.remove("");
+			gml.triggerPhrase = trigger.getTriggerPhrase();
 
 			return this;
 		}

@@ -9,6 +9,9 @@
 	<f:entry title="${%Trigger phrase}" field="triggerPhrase">
 	  <f:textbox />
 	</f:entry>
+		<f:entry title="${testMode}" field="testMode">
+    	  <f:textbox />
+    	</f:entry>
 	<f:entry title="Only use trigger phrase for build triggering" field="onlyTriggerPhrase">
 	  <f:checkbox />
 	</f:entry>
@@ -26,6 +29,20 @@
 	</f:entry>
     <f:entry title="Build every pull request automatically without asking (Dangerous!)." field="permitAll">
       <f:checkbox />
+    </f:entry>
+    <f:entry title="${%Whitelist Target Branches:}" field="whiteListTargetBranches" >
+      <f:repeatable field="whiteListTargetBranches" minimum="1"  add="Add Branch" >
+        <table width="100%">
+          <f:entry field="branch">
+            <f:textbox/>
+          </f:entry>
+          <f:entry title="">
+            <div align="right">
+              <f:repeatableDeleteButton value="Delete Branch"/>
+            </div>
+          </f:entry>
+        </table>
+      </f:repeatable>
     </f:entry>
   </f:advanced>
 </j:jelly>

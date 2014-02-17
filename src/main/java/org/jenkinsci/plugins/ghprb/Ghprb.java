@@ -4,12 +4,14 @@ import com.coravy.hudson.plugins.github.GithubProjectProperty;
 import hudson.model.AbstractProject;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import jenkins.model.Jenkins;
+import org.kohsuke.github.GHUser;
 
 /**
  * @author janinko
@@ -102,20 +104,20 @@ public class Ghprb {
 		return trigger.getOnlyTriggerPhrase();
 	}
 
-	public boolean isWhitelisted(String username){
+	public boolean isWhitelisted(GHUser user){
 		return trigger.getPermitAll()
-			|| whitelisted.contains(username)
-		    || admins.contains(username)
-		    || isInWhitelistedOrganisation(username);
+			|| whitelisted.contains(user.getLogin())
+		    || admins.contains(user.getLogin())
+		    || isInWhitelistedOrganisation(user);
 	}
 
 	public boolean isAdmin(String username){
 		return admins.contains(username);
 	}
 
-	private boolean isInWhitelistedOrganisation(String username) {
+	private boolean isInWhitelistedOrganisation(GHUser user) {
 		for(String organisation : organisations){
-			if(getGitHub().isUserMemberOfOrganization(organisation,username)){
+			if(getGitHub().isUserMemberOfOrganization(organisation,user)){
 				return true;
 			}
 		}
@@ -124,6 +126,10 @@ public class Ghprb {
 
 	String getGitHubServer() {
 		return githubServer;
+	}
+	
+	List<GhprbBranch> getWhiteListTargetBranches() {
+		return trigger.getWhiteListTargetBranches();
 	}
 
 

@@ -17,12 +17,15 @@ import org.kohsuke.github.GitHub;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import static org.kohsuke.github.GHCommitState.PENDING;
 import static org.kohsuke.github.GHIssueState.OPEN;
@@ -69,7 +72,7 @@ public class GhprbRepositoryTest {
     private GHUser ghUser;
 
     private GhprbRepository ghprbRepository;
-    private Map<Integer,GhprbPullRequest> pulls;
+    private ConcurrentMap<Integer,GhprbPullRequest> pulls;
     private GhprbPullRequest ghprbPullRequest;
 
     @Before
@@ -84,6 +87,29 @@ public class GhprbRepositoryTest {
         // Mock rate limit
         given(gt.getRateLimit()).willReturn(ghRateLimit);
         increaseRateLimitToDefaults();
+    }
+
+    @Test
+    public void testCheckMethodWhenUsingGitHubEnterprise() throws IOException {
+        // GIVEN
+        given(gt.getRateLimit()).willThrow(new FileNotFoundException());
+        List<GHPullRequest> ghPullRequests = createListWithMockPR();
+        given(ghRepository.getPullRequests(eq(GHIssueState.OPEN))).willReturn(ghPullRequests);
+
+        mockHeadAndBase();
+
+        given(helper.ifOnlyTriggerPhrase()).willReturn(true);
+
+        pulls.put(1, ghprbPullRequest);
+
+        given(ghPullRequest.getUpdatedAt()).willReturn(UPDATE_DATE);
+        given(ghPullRequest.getNumber()).willReturn(1);
+
+        // WHEN
+        ghprbRepository.check();
+
+        // THEN
+        verifyGetGithub(1);
     }
 
     @Test
@@ -403,7 +429,7 @@ public class GhprbRepositoryTest {
         given(ghPullRequest.getHead()).willReturn(head);
         given(head.getSha()).willReturn("head sha");
 
-        pulls = new Hash<Integer, GhprbPullRequest>();
+        pulls = new ConcurrentHashMap<Integer, GhprbPullRequest>();
         ghprbRepository = new GhprbRepository(TEST_USER_NAME, TEST_REPO_NAME, helper, pulls);
         ghprbPullRequest = new GhprbPullRequest(ghPullRequest, helper, ghprbRepository);
 

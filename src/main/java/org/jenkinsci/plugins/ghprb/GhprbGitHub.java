@@ -6,6 +6,7 @@ import java.util.logging.Logger;
 import org.kohsuke.github.GHOrganization;
 import org.kohsuke.github.GHUser;
 import org.kohsuke.github.GitHub;
+import org.kohsuke.github.GitHubBuilder;
 
 /**
  * @author janinko
@@ -19,13 +20,24 @@ public class GhprbGitHub {
 		String serverAPIUrl = GhprbTrigger.getDscp().getServerAPIUrl();
 		if(accessToken != null && !accessToken.isEmpty()) {
 			try {
-				gh = GitHub.connectUsingOAuth(serverAPIUrl, accessToken);
+				gh = new GitHubBuilder()
+						.withEndpoint(serverAPIUrl)
+						.withOAuthToken(accessToken)
+						.withConnector(new HttpConnectorWithJenkinsProxy())
+						.build();
 			} catch(IOException e) {
 				logger.log(Level.SEVERE, "Can''t connect to {0} using oauth", serverAPIUrl);
 				throw e;
 			}
 		} else {
-			gh = GitHub.connect(GhprbTrigger.getDscp().getUsername(), null, GhprbTrigger.getDscp().getPassword());
+			if (serverAPIUrl.contains("api/v3")) {
+				gh = GitHub.connectToEnterprise(serverAPIUrl, GhprbTrigger.getDscp().getUsername(), GhprbTrigger.getDscp().getPassword());
+			} else {
+				gh = new GitHubBuilder()
+						.withPassword(GhprbTrigger.getDscp().getUsername(), GhprbTrigger.getDscp().getPassword())
+						.withConnector(new HttpConnectorWithJenkinsProxy())
+						.build();
+			}
 		}
 	}
 
@@ -49,5 +61,14 @@ public class GhprbGitHub {
 			return false;
 		}
 		return orgHasMember;
+	}
+
+	public String getBotUserLogin() {
+		try {
+			return get().getMyself().getLogin();
+		} catch (IOException ex) {
+			logger.log(Level.SEVERE, null, ex);
+			return null;
+		}
 	}
 }

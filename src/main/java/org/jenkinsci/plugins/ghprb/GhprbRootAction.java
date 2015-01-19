@@ -8,6 +8,7 @@ import jenkins.model.Jenkins;
 import org.acegisecurity.Authentication;
 import org.acegisecurity.context.SecurityContextHolder;
 import org.kohsuke.github.GHEventPayload;
+import org.kohsuke.github.GHIssueState;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.StaplerResponse;
@@ -53,12 +54,20 @@ public class GhprbRootAction implements UnprotectedRootAction {
         try {
             if ("issue_comment".equals(event)) {
                 GHEventPayload.IssueComment issueComment = gh.get().parseEventPayload(new StringReader(payload), GHEventPayload.IssueComment.class);
+                GHIssueState state = issueComment.getIssue().getState();
+                if (state == GHIssueState.CLOSED) {
+                    logger.log(Level.INFO, "Skip comment on closed PR");
+                    return;
+                }
+
                 for (GhprbRepository repo : getRepos(issueComment.getRepository())) {
+                    logger.log(Level.INFO, "Checking issue comment ''{0}'' for repo {1}", new Object[] {issueComment.getComment(), repo.getName()});
                     repo.onIssueCommentHook(issueComment);
                 }
             } else if ("pull_request".equals(event)) {
                 GHEventPayload.PullRequest pr = gh.get().parseEventPayload(new StringReader(payload), GHEventPayload.PullRequest.class);
                 for (GhprbRepository repo : getRepos(pr.getPullRequest().getRepository())) {
+                    logger.log(Level.INFO, "Checking PR #{1} for {0}", new Object[] { repo.getName(), pr.getNumber()});
                     repo.onPullRequestHook(pr);
                 }
             } else {
@@ -69,24 +78,8 @@ public class GhprbRootAction implements UnprotectedRootAction {
         }
     }
 
-    private Set<GhprbRepository> getRepos(GHRepository repo) throws IOException {
-        try {
-            return getRepos(repo.getOwner().getLogin() + "/" + repo.getName());
-        } catch (Exception ex) {
-            logger.log(Level.WARNING, "Can't get a valid owner for repo");
-            // this normally happens due to missing "login" field in the owner of the repo
-            // when the repo is inside of an organisation account. The only field which doesn't
-            // rely on the owner.login (which would throw a null pointer exception) is the "html_url"
-            // field. So we try to parse the owner out of that here until github fixes his api
-            String repoUrl = repo.getUrl();
-            if (repoUrl.endsWith("/")) {// strip off trailing slash if any
-                repoUrl = repoUrl.substring(0, repoUrl.length() - 2);
-            }
-            int slashIndex = repoUrl.lastIndexOf('/');
-            String owner = repoUrl.substring(slashIndex + 1);
-            logger.log(Level.INFO, "Parsed {0} from {1}", new Object[]{owner, repoUrl});
-            return getRepos(owner + "/" + repo.getName());
-        }
+    private Set<GhprbRepository> getRepos(GHRepository repo) {
+        return getRepos(repo.getFullName());
     }
 
     private Set<GhprbRepository> getRepos(String repo) {
